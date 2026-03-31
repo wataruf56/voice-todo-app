@@ -123,40 +123,6 @@ def find_day_column_blocks(notion, page_id, target_day):
     return None
 
 
-def append_tasks_to_column(notion, column_id, tasks):
-    """カラムにタスクをToDoブロックとして追加する"""
-    children = []
-    for task in tasks:
-        sub_blocks = []
-        for subtask in task.get("subtasks", []):
-            sub_blocks.append({
-                "object": "block",
-                "type": "to_do",
-                "to_do": {
-                    "rich_text": [{"type": "text", "text": {"content": subtask}}],
-                    "checked": False,
-                },
-            })
-
-        todo_block = {
-            "object": "block",
-            "type": "to_do",
-            "to_do": {
-                "rich_text": [{"type": "text", "text": {"content": task["title"]}}],
-                "checked": False,
-            },
-        }
-        children.append(todo_block)
-
-        if sub_blocks:
-            notion.blocks.children.append(block_id="placeholder", children=sub_blocks)
-
-    if children:
-        notion.blocks.children.append(block_id=column_id, children=children)
-
-    return children
-
-
 def append_tasks_with_subtasks(notion, column_id, tasks):
     """カラムにタスクとサブタスクをToDoブロックとして追加する"""
     for task in tasks:
@@ -202,39 +168,44 @@ def process_voice_input():
 
     target_date = datetime.now()
 
-    # Geminiでタスク分解
-    result = decompose_tasks_with_gemini(text, target_date)
-    tasks = result.get("tasks", [])
-    if not tasks:
-        return jsonify({"error": "タスクを抽出できませんでした"}), 400
+    try:
+        # Geminiでタスク分解
+        result = decompose_tasks_with_gemini(text, target_date)
+        tasks = result.get("tasks", [])
+        if not tasks:
+            return jsonify({"error": "タスクを抽出できませんでした"}), 400
 
-    # Notionに書き込み
-    notion = NotionClient(auth=NOTION_TOKEN)
-    page_id = find_weekly_page(notion, target_date)
-    if not page_id:
-        return jsonify({"error": "該当する週のNotionページが見つかりません"}), 404
+        # Notionに書き込み
+        notion = NotionClient(auth=NOTION_TOKEN)
+        page_id = find_weekly_page(notion, target_date)
+        if not page_id:
+            return jsonify({"error": "該当する週のNotionページが見つかりません"}), 404
 
-    # 曜日ごとにタスクを振り分け
-    tasks_by_day = {}
-    for task in tasks:
-        day = task.get("day", DAY_MAP[target_date.weekday()])
-        if day not in tasks_by_day:
-            tasks_by_day[day] = []
-        tasks_by_day[day].append(task)
+        # 曜日ごとにタスクを振り分け
+        tasks_by_day = {}
+        for task in tasks:
+            day = task.get("day", DAY_MAP[target_date.weekday()])
+            if day not in tasks_by_day:
+                tasks_by_day[day] = []
+            tasks_by_day[day].append(task)
 
-    written_days = []
-    for day, day_tasks in tasks_by_day.items():
-        column_id = find_day_column_blocks(notion, page_id, day)
-        if column_id:
-            append_tasks_with_subtasks(notion, column_id, day_tasks)
-            written_days.append(day)
+        written_days = []
+        for day, day_tasks in tasks_by_day.items():
+            column_id = find_day_column_blocks(notion, page_id, day)
+            if column_id:
+                append_tasks_with_subtasks(notion, column_id, day_tasks)
+                written_days.append(day)
 
-    return jsonify({
-        "success": True,
-        "tasks": tasks,
-        "written_days": written_days,
-        "message": f"{len(tasks)}個のタスクを{', '.join(written_days)}に書き込みました",
-    })
+        return jsonify({
+            "success": True,
+            "tasks": tasks,
+            "written_days": written_days,
+            "message": f"{len(tasks)}個のタスクを{', '.join(written_days)}に書き込みました",
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"処理中にエラーが発生しました: {str(e)}"}), 500
 
 
 @app.route("/api/health", methods=["GET"])
