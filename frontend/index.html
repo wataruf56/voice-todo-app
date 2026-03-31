@@ -202,8 +202,8 @@
     <div class="task-preview" id="taskPreview"></div>
 
     <script>
-        // Cloud RunのバックエンドURL（デプロイ後に設定）
-        const API_URL = localStorage.getItem('api_url') || '';
+        // Cloud RunのバックエンドURL
+        const API_URL = localStorage.getItem('api_url') || 'https://voice-todo-backend-498853394103.asia-northeast1.run.app';
 
         const textarea = document.getElementById('voiceInput');
         const charCount = document.getElementById('charCount');
