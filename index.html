@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Todo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin-bottom: 8px;
+            color: #e94560;
+        }
+
+        .subtitle {
+            font-size: 14px;
+            color: #888;
+            margin-bottom: 24px;
+        }
+
+        .input-area {
+            width: 100%;
+            max-width: 600px;
+        }
+
+        textarea {
+            width: 100%;
+            height: 200px;
+            padding: 16px;
+            border: 2px solid #333;
+            border-radius: 12px;
+            background: #16213e;
+            color: #eee;
+            font-size: 16px;
+            line-height: 1.6;
+            resize: vertical;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        textarea:focus {
+            border-color: #e94560;
+        }
+
+        textarea::placeholder {
+            color: #555;
+        }
+
+        .btn {
+            width: 100%;
+            max-width: 600px;
+            padding: 16px;
+            margin-top: 16px;
+            border: none;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-submit {
+            background: #e94560;
+            color: white;
+        }
+
+        .btn-submit:hover {
+            background: #c73652;
+        }
+
+        .btn-submit:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        .status {
+            width: 100%;
+            max-width: 600px;
+            margin-top: 20px;
+            padding: 16px;
+            border-radius: 12px;
+            display: none;
+            text-align: center;
+            font-size: 16px;
+        }
+
+        .status.loading {
+            display: block;
+            background: #16213e;
+            border: 1px solid #333;
+        }
+
+        .status.success {
+            display: block;
+            background: #0a3d2a;
+            border: 1px solid #1a6b4a;
+        }
+
+        .status.error {
+            display: block;
+            background: #3d0a0a;
+            border: 1px solid #6b1a1a;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #555;
+            border-top: 3px solid #e94560;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .task-preview {
+            width: 100%;
+            max-width: 600px;
+            margin-top: 16px;
+            text-align: left;
+        }
+
+        .task-preview h3 {
+            font-size: 14px;
+            color: #888;
+            margin-bottom: 8px;
+        }
+
+        .task-item {
+            padding: 8px 12px;
+            margin-bottom: 4px;
+            background: #16213e;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .task-item .day-tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: #e94560;
+            font-size: 12px;
+            margin-right: 8px;
+        }
+
+        .task-item .subtask {
+            margin-left: 24px;
+            margin-top: 4px;
+            color: #aaa;
+            font-size: 13px;
+        }
+
+        .char-count {
+            text-align: right;
+            font-size: 12px;
+            color: #555;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Voice Todo</h1>
+    <p class="subtitle">話した内容をNotionのタスクに変換</p>
+
+    <div class="input-area">
+        <textarea
+            id="voiceInput"
+            placeholder="ここに音声入力のテキストを貼り付けてください...
+
+例：今日はまずLPのドメインを取らなきゃ。あとゴルフアプリのテストもしたい。明日は法人化の書類を調べよう。"
+        ></textarea>
+        <div class="char-count"><span id="charCount">0</span> 文字</div>
+    </div>
+
+    <button class="btn btn-submit" id="submitBtn" onclick="submitTasks()">
+        Notionに送信
+    </button>
+
+    <div class="status" id="status"></div>
+
+    <div class="task-preview" id="taskPreview"></div>
+
+    <script>
+        // Cloud RunのバックエンドURL
+        const API_URL = localStorage.getItem('api_url') || 'https://voice-todo-backend-498853394103.asia-northeast1.run.app';
+
+        const textarea = document.getElementById('voiceInput');
+        const charCount = document.getElementById('charCount');
+
+        textarea.addEventListener('input', () => {
+            charCount.textContent = textarea.value.length;
+        });
+
+        async function submitTasks() {
+            const text = document.getElementById('voiceInput').value.trim();
+            if (!text) {
+                showStatus('テキストを入力してください', 'error');
+                return;
+            }
+
+            if (!API_URL) {
+                const url = prompt('バックエンドAPIのURLを入力してください（初回のみ）:');
+                if (url) {
+                    localStorage.setItem('api_url', url);
+                    location.reload();
+                }
+                return;
+            }
+
+            const btn = document.getElementById('submitBtn');
+            btn.disabled = true;
+            showStatus('<span class="spinner"></span>タスクを分解中...', 'loading');
+
+            try {
+                const response = await fetch(`${API_URL}/api/process`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text }),
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showStatus(`${data.message}`, 'success');
+                    showTaskPreview(data.tasks);
+                    document.getElementById('voiceInput').value = '';
+                    charCount.textContent = '0';
+                } else {
+                    showStatus(`エラー: ${data.error}`, 'error');
+                }
+            } catch (err) {
+                showStatus(`通信エラー: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.innerHTML = message;
+            status.className = `status ${type}`;
+        }
+
+        function showTaskPreview(tasks) {
+            const preview = document.getElementById('taskPreview');
+            if (!tasks || tasks.length === 0) {
+                preview.innerHTML = '';
+                return;
+            }
+
+            let html = '<h3>書き込まれたタスク:</h3>';
+            tasks.forEach(task => {
+                html += `<div class="task-item">
+                    <span class="day-tag">${task.day}</span>
+                    ${task.title}`;
+                if (task.subtasks) {
+                    task.subtasks.forEach(sub => {
+                        html += `<div class="subtask">└ ${sub}</div>`;
+                    });
+                }
+                html += '</div>';
+            });
+            preview.innerHTML = html;
+        }
+
+        // API URL設定用のヘルパー
+        if (API_URL) {
+            document.querySelector('.subtitle').textContent += ` (API: ${API_URL.substring(0, 30)}...)`;
+        }
+    </script>
+</body>
+</html>
