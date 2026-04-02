@@ -69,19 +69,17 @@ def decompose_tasks_with_gemini(text, target_date):
 
 このテキストからタスクを抽出し、以下のルールで整理してください：
 
-1. タスクを具体的なアクションに分解する
-2. 各タスクにはサブタスク（1〜3個程度）を付ける。サブタスクは実際に手を動かすレベルまで細分化する
-3. 「今日」「明日」「水曜日に」などの日付表現がある場合、該当する曜日に振り分ける
-4. 日付指定がないタスクは「今日」（{today_name}）に入れる
-5. 曜日は Mon, Tue, Wed, Thu, Fri, Weekend のいずれかで返す
+1. 話された内容からタスクをそのまま抽出する（勝手に分解・細分化しない）
+2. 「今日」「明日」「水曜日に」などの日付表現がある場合、該当する曜日に振り分ける
+3. 日付指定がないタスクは「今日」（{today_name}）に入れる
+4. 曜日は Mon, Tue, Wed, Thu, Fri, Weekend のいずれかで返す
 
 以下のJSON形式で出力してください（他の文章は一切不要）:
 {{
   "tasks": [
     {{
       "day": "Mon",
-      "title": "タスク名",
-      "subtasks": ["サブタスク1", "サブタスク2"]
+      "title": "タスク名"
     }}
   ]
 }}
@@ -92,7 +90,7 @@ def decompose_tasks_with_gemini(text, target_date):
 
     client = genai.Client(api_key=GEMINI_API_KEY)
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-2.5-flash",
         contents=prompt,
     )
 
@@ -123,39 +121,24 @@ def find_day_column_blocks(notion, page_id, target_day):
     return None
 
 
-def append_tasks_with_subtasks(notion, column_id, tasks):
-    """カラムにタスクとサブタスクをToDoブロックとして追加する"""
+def append_tasks_to_column(notion, column_id, tasks):
+    """カラムにタスクをToDoブロックとして追加する"""
+    blocks = []
     for task in tasks:
-        parent_result = notion.blocks.children.append(
+        blocks.append({
+            "object": "block",
+            "type": "to_do",
+            "to_do": {
+                "rich_text": [{"type": "text", "text": {"content": task["title"]}}],
+                "checked": False,
+            },
+        })
+
+    if blocks:
+        notion.blocks.children.append(
             block_id=column_id,
-            children=[{
-                "object": "block",
-                "type": "to_do",
-                "to_do": {
-                    "rich_text": [{"type": "text", "text": {"content": task["title"]}}],
-                    "checked": False,
-                },
-            }],
+            children=blocks,
         )
-
-        parent_block_id = parent_result["results"][0]["id"]
-
-        sub_blocks = []
-        for subtask in task.get("subtasks", []):
-            sub_blocks.append({
-                "object": "block",
-                "type": "to_do",
-                "to_do": {
-                    "rich_text": [{"type": "text", "text": {"content": subtask}}],
-                    "checked": False,
-                },
-            })
-
-        if sub_blocks:
-            notion.blocks.children.append(
-                block_id=parent_block_id,
-                children=sub_blocks,
-            )
 
 
 @app.route("/api/process", methods=["POST"])
@@ -193,7 +176,7 @@ def process_voice_input():
         for day, day_tasks in tasks_by_day.items():
             column_id = find_day_column_blocks(notion, page_id, day)
             if column_id:
-                append_tasks_with_subtasks(notion, column_id, day_tasks)
+                append_tasks_to_column(notion, column_id, day_tasks)
                 written_days.append(day)
 
         return jsonify({

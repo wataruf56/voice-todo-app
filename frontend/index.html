@@ -273,13 +273,8 @@
             tasks.forEach(task => {
                 html += `<div class="task-item">
                     <span class="day-tag">${task.day}</span>
-                    ${task.title}`;
-                if (task.subtasks) {
-                    task.subtasks.forEach(sub => {
-                        html += `<div class="subtask">└ ${sub}</div>`;
-                    });
-                }
-                html += '</div>';
+                    ${task.title}
+                </div>`;
             });
             preview.innerHTML = html;
         }
