@@ -271,10 +271,8 @@
 
             let html = '<h3>書き込まれたタスク:</h3>';
             tasks.forEach(task => {
-                html += `<div class="task-item">
-                    <span class="day-tag">${task.day}</span>
-                    ${task.title}
-                </div>`;
+                const title = typeof task === 'string' ? task : task.title;
+                html += `<div class="task-item">☑ ${title}</div>`;
             });
             preview.innerHTML = html;
         }

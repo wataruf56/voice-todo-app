@@ -14,26 +14,6 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
 NOTION_PARENT_PAGE_ID = os.environ.get("NOTION_PARENT_PAGE_ID")
 
-DAY_MAP = {
-    0: "Mon",
-    1: "Tue",
-    2: "Wed",
-    3: "Thu",
-    4: "Fri",
-    5: "Weekend",
-    6: "Weekend",
-}
-
-DAY_NAMES_JA = {
-    "月曜": 0, "月曜日": 0, "月": 0,
-    "火曜": 1, "火曜日": 1, "火": 1,
-    "水曜": 2, "水曜日": 2, "水": 2,
-    "木曜": 3, "木曜日": 3, "木": 3,
-    "金曜": 4, "金曜日": 4, "金": 4,
-    "土曜": 5, "土曜日": 5, "土": 5,
-    "日曜": 6, "日曜日": 6, "日": 6,
-}
-
 
 def get_week_monday(target_date):
     """target_dateが属する週の月曜日を返す"""
@@ -59,29 +39,35 @@ def find_weekly_page(notion, target_date):
     return None
 
 
-def decompose_tasks_with_gemini(text, target_date):
-    """Gemini APIでテキストからタスクを分解する"""
-    today_weekday = target_date.weekday()
-    today_name = ["月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日", "日曜日"][today_weekday]
+def find_task_synced_block(notion, page_id):
+    """ページ内の「タスク」見出し直後の同期ブロックを探す"""
+    blocks = notion.blocks.children.list(block_id=page_id)
 
-    prompt = f"""あなたはタスク整理のプロです。以下のテキストは、朝に音声入力で話した内容を文字起こししたものです。
-今日は{target_date.strftime('%Y/%m/%d')}（{today_name}）です。
+    found_task_heading = False
+    for block in blocks["results"]:
+        if block["type"] == "heading_2":
+            heading_text = ""
+            for rt in block["heading_2"].get("rich_text", []):
+                heading_text += rt.get("plain_text", "")
+            if heading_text.strip() == "タスク":
+                found_task_heading = True
+                continue
 
-このテキストからタスクを抽出し、以下のルールで整理してください：
+        if found_task_heading and block["type"] == "synced_block":
+            return block["id"]
 
-1. 話された内容からタスクをそのまま抽出する（勝手に分解・細分化しない）
-2. 「今日」「明日」「水曜日に」などの日付表現がある場合、該当する曜日に振り分ける
-3. 日付指定がないタスクは「今日」（{today_name}）に入れる
-4. 曜日は Mon, Tue, Wed, Thu, Fri, Weekend のいずれかで返す
+    return None
+
+
+def extract_tasks_with_gemini(text):
+    """Gemini APIでテキストからタスクを抽出する"""
+    prompt = f"""以下のテキストは音声入力で話した内容です。
+このテキストからタスクをそのまま抽出してください。
+勝手に分解・細分化せず、話された通りのタスクを返してください。
 
 以下のJSON形式で出力してください（他の文章は一切不要）:
 {{
-  "tasks": [
-    {{
-      "day": "Mon",
-      "title": "タスク名"
-    }}
-  ]
+  "tasks": ["タスク1", "タスク2", "タスク3"]
 }}
 
 --- テキスト ---
@@ -101,42 +87,22 @@ def decompose_tasks_with_gemini(text, target_date):
     return {"tasks": []}
 
 
-def find_day_column_blocks(notion, page_id, target_day):
-    """ページ内のカラムレイアウトから該当曜日のブロックを探す"""
-    blocks = notion.blocks.children.list(block_id=page_id)
-
-    for block in blocks["results"]:
-        if block["type"] == "column_list":
-            columns = notion.blocks.children.list(block_id=block["id"])
-            for column in columns["results"]:
-                col_children = notion.blocks.children.list(block_id=column["id"])
-                for child in col_children["results"]:
-                    if child["type"] == "heading_2":
-                        heading_text = ""
-                        for rt in child["heading_2"].get("rich_text", []):
-                            heading_text += rt.get("plain_text", "")
-                        heading_text = heading_text.strip()
-                        if heading_text == target_day:
-                            return column["id"]
-    return None
-
-
-def append_tasks_to_column(notion, column_id, tasks):
-    """カラムにタスクをToDoブロックとして追加する"""
+def append_tasks_to_synced_block(notion, synced_block_id, tasks):
+    """同期ブロックにタスクをToDoブロックとして追加する"""
     blocks = []
-    for task in tasks:
+    for task_title in tasks:
         blocks.append({
             "object": "block",
             "type": "to_do",
             "to_do": {
-                "rich_text": [{"type": "text", "text": {"content": task["title"]}}],
+                "rich_text": [{"type": "text", "text": {"content": task_title}}],
                 "checked": False,
             },
         })
 
     if blocks:
         notion.blocks.children.append(
-            block_id=column_id,
+            block_id=synced_block_id,
             children=blocks,
         )
 
@@ -152,8 +118,8 @@ def process_voice_input():
     target_date = datetime.now()
 
     try:
-        # Geminiでタスク分解
-        result = decompose_tasks_with_gemini(text, target_date)
+        # Geminiでタスク抽出
+        result = extract_tasks_with_gemini(text)
         tasks = result.get("tasks", [])
         if not tasks:
             return jsonify({"error": "タスクを抽出できませんでした"}), 400
@@ -164,26 +130,16 @@ def process_voice_input():
         if not page_id:
             return jsonify({"error": "該当する週のNotionページが見つかりません"}), 404
 
-        # 曜日ごとにタスクを振り分け
-        tasks_by_day = {}
-        for task in tasks:
-            day = task.get("day", DAY_MAP[target_date.weekday()])
-            if day not in tasks_by_day:
-                tasks_by_day[day] = []
-            tasks_by_day[day].append(task)
+        synced_block_id = find_task_synced_block(notion, page_id)
+        if not synced_block_id:
+            return jsonify({"error": "タスク用の同期ブロックが見つかりません"}), 404
 
-        written_days = []
-        for day, day_tasks in tasks_by_day.items():
-            column_id = find_day_column_blocks(notion, page_id, day)
-            if column_id:
-                append_tasks_to_column(notion, column_id, day_tasks)
-                written_days.append(day)
+        append_tasks_to_synced_block(notion, synced_block_id, tasks)
 
         return jsonify({
             "success": True,
             "tasks": tasks,
-            "written_days": written_days,
-            "message": f"{len(tasks)}個のタスクを{', '.join(written_days)}に書き込みました",
+            "message": f"{len(tasks)}個のタスクを書き込みました",
         })
     except Exception as e:
         import traceback
